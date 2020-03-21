@@ -1,0 +1,2 @@
+A, B -> (A \or B) | (A \and B) | (A \implies B) | (A \iff B) | \not A
+P -> \exists x P | \all x P | :empty

@@ -6,3 +6,9 @@ connectives: \land \lor \implies \iff \neg
 quantifiers: \exists \forall
 formula: \forall x ( \exists y ( P(x,y) \implies \neg Q(x) )  
 \lor \exists z ( ( (C = z) \land Q(z) ) \land P(x,z) ) )
+
+
+
+
+
+\lor \exists w ( (w = D) \land \forall z \exists y ( w = y \implies P(z,D) ) )
