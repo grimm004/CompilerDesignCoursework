@@ -59,9 +59,9 @@ class InputSet(list):
             if not self.regex.match(element):
                 raise FirstOrderError(self.location, "Invalid %s syntax '%s'." % (self.name, element))
 
-    def token_groups(self) -> Iterator[Tuple[str, str]]:
-        yield r"|".join([re.escape(element) for element in sorted(self, key=lambda e: len(e), reverse=True)]),\
-              self.name.upper()
+    def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], str]]:
+        for element in self:
+            yield (False, element), self.name.upper()
 
     def contains(self, item: str) -> bool:
         return item in self
@@ -103,7 +103,7 @@ class OperatorSet(InputSet):
 
     def token_groups(self) -> Iterator[Tuple[str, str]]:
         for literal, operator_type in sorted(self.operator_map, key=lambda op: len(op[0]), reverse=True):
-            yield re.escape(literal), operator_type
+            yield (False, literal), operator_type
 
 
 class VariableSet(LiteralSet):
@@ -131,10 +131,9 @@ class PredicateSet(LiteralSet):
     def contains(self, item: str) -> bool:
         return item in [predicate[0] for predicate in self.data]
 
-    def token_groups(self) -> Iterator[Tuple[str, str]]:
-        yield "|".join([re.escape(element[0])
-                        for element in sorted(self.data, key=lambda e: len(e[0]), reverse=True)]),\
-              self.name.upper()
+    def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], str]]:
+        for element in self.data:
+            yield (False, element[0]), self.name.upper()
 
 
 class EqualitySet(OperatorSet):
@@ -185,16 +184,22 @@ class Token:
 class FirstOrderLexer:
     def __init__(self, input_sets: Dict[str, InputSet],
                  formula: FirstOrderFormula = FirstOrderFormula()) -> None:
-        regex_parts: List[str] = [
-            "(?P<open_bracket>[(])",
-            "(?P<close_bracket>[)])",
-            "(?P<comma>[,])"
-        ]
-        self.token_types: Set[str] = set()
+
+        self.group_map: Dict[str, str] =\
+            {"GROUP_OB": "OPEN_BRACKET", "GROUP_CB": "CLOSE_BRACKET", "GROUP_CO": "COMMA"}
+        group_values: List[Tuple[str, Tuple[bool, str]]] =\
+            [("GROUP_OB", (False, "(")), ("GROUP_CB", (False, ")")), ("GROUP_CO", (False, ","))]
+        group_index: int = 0
         for literal_set in input_sets.values():
-            for (literal_value, token_type) in literal_set.token_groups():
-                self.token_types.add(token_type)
-                regex_parts.append(r"(?P<%s>(%s))" % (token_type, literal_value))
+            for (literal_data, token_type) in literal_set.token_groups():
+                group_id: str = "GROUP_%d" % group_index
+                self.group_map[group_id] = token_type
+                group_values.append((group_id, literal_data))
+                group_index += 1
+
+        regex_parts: List[str] = [r"(?P<%s>(%s))" % (group_id, literal_value if is_regex else re.escape(literal_value))
+                                  for (group_id, (is_regex, literal_value))
+                                  in sorted(group_values, key=lambda tv: len(tv[1][1]), reverse=True)]
 
         self.regex_rules = re.compile(r"|".join(regex_parts))
         self.input_formula: FirstOrderFormula = formula
@@ -223,7 +228,7 @@ class FirstOrderLexer:
 
         if rule_match:
             group = rule_match.lastgroup
-            token = Token(self.input_formula.get_location(self.index), group, rule_match.group(group))
+            token = Token(self.input_formula.get_location(self.index), self.group_map[group], rule_match.group(group))
             self.index = rule_match.end()
             return token
 
@@ -297,7 +302,7 @@ if __name__ == '__main__':
 
             lexer: FirstOrderLexer = FirstOrderLexer(sets, input_formula)
             tokens: List[Token] = list(lexer.tokens())
-            # print("\n".join(str(token) for token in tokens))
+            print("\n".join(str(token) for token in tokens))
             parser: FirstOrderParser = FirstOrderParser(lexer)
         except FirstOrderError as e:
             err_string: str = str(e)
