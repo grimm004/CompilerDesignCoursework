@@ -59,11 +59,9 @@ class InputSet(list):
             if not self.regex.match(element):
                 raise FirstOrderError(self.location, "Invalid %s syntax '%s'." % (self.name, element))
 
-    # def get_regex(self) -> str:
-    #     return r"|".join([re.escape(element) for element in self])
-
     def token_groups(self) -> Iterator[Tuple[str, str]]:
-        yield r"|".join([re.escape(element) for element in self]), self.name.upper()
+        yield r"|".join([re.escape(element) for element in sorted(self, key=lambda e: len(e), reverse=True)]),\
+              self.name.upper()
 
     def contains(self, item: str) -> bool:
         return item in self
@@ -90,6 +88,7 @@ class OperatorSet(InputSet):
         super().__init__(name)
         self.operators: List[str] = operators
         self.operator_map: List[Tuple[str, str]] = []
+        self.regex: Pattern = re.compile(r"[A-Za-z0-9_\\]+")
 
     def verify(self) -> None:
         super().verify()
@@ -103,7 +102,7 @@ class OperatorSet(InputSet):
             self.operator_map.append((self[i], self.operators[i]))
 
     def token_groups(self) -> Iterator[Tuple[str, str]]:
-        for literal, operator_type in self.operator_map:
+        for literal, operator_type in sorted(self.operator_map, key=lambda op: len(op[0]), reverse=True):
             yield re.escape(literal), operator_type
 
 
@@ -132,16 +131,16 @@ class PredicateSet(LiteralSet):
     def contains(self, item: str) -> bool:
         return item in [predicate[0] for predicate in self.data]
 
-    # def get_regex(self) -> str:
-    #     return "|".join([re.escape(element[0]) for element in self.data])
-
     def token_groups(self) -> Iterator[Tuple[str, str]]:
-        yield "|".join([re.escape(element[0]) for element in self.data]), self.name.upper()
+        yield "|".join([re.escape(element[0])
+                        for element in sorted(self.data, key=lambda e: len(e[0]), reverse=True)]),\
+              self.name.upper()
 
 
 class EqualitySet(OperatorSet):
     def __init__(self) -> None:
         super().__init__("equality", ["EQUALS"])
+        self.regex: Pattern = re.compile(r"[A-Za-z0-9_\\=]+")
 
 
 class ConnectiveSet(OperatorSet):
@@ -160,7 +159,7 @@ class FirstOrderError(Exception):
         self.message: str = message
 
     def __str__(self) -> str:
-        return "Error%s%s" %\
+        return "Error%s%s" % \
                ((" (%s)" % self.location.string())
                 if self.location is not None else "",
                 (": %s" % self.message) if self.message != "" else "")
@@ -248,70 +247,75 @@ class FirstOrderParser:
 
 
 if __name__ == '__main__':
-    with open(sys.argv[1], "rt") as file:
-        input_text: str = file.read().replace("\t", "    ")
+    def main():
+        with open(sys.argv[1], "rt") as file:
+            input_text: str = file.read().replace("\t", "    ")
 
-    lines: List[str] = input_text.split("\n")
+        lines: List[str] = input_text.split("\n")
 
-    try:
-        sets: Dict[str, InputSet] = {
-            "variables": VariableSet(),
-            "constants": ConstantSet(),
-            "predicates": PredicateSet(),
-            "equality": EqualitySet(),
-            "connectives": ConnectiveSet(),
-            "quantifiers": QuantifierSet()
-        }
-        input_formula: FirstOrderFormula = FirstOrderFormula()
+        try:
+            sets: Dict[str, InputSet] = {
+                "variables": VariableSet(),
+                "constants": ConstantSet(),
+                "predicates": PredicateSet(),
+                "equality": EqualitySet(),
+                "connectives": ConnectiveSet(),
+                "quantifiers": QuantifierSet()
+            }
+            input_formula: FirstOrderFormula = FirstOrderFormula()
 
-        current_set: str = ""
-        in_formula: bool = False
-        formula_found: bool = False
-        for i_ in range(len(lines)):
-            line_parts = lines[i_].split(" ")
-            current_set = line_parts[0][:-1]
-            if current_set in sets.keys():
-                in_formula = False
-                sets[current_set].parse(Location(i_), " ".join(line_parts[1:]))
-                for element_ in sets[current_set]:
-                    for set_ in sets:
-                        if set_ != current_set and sets[set_].contains(element_):
-                            raise FirstOrderError(Location(i_),
-                                                  "Identifier '%s' already in %s set." % (element_, sets[set_].name))
-            elif current_set == "formula" or in_formula:
-                if not in_formula:
-                    input_formula.start_location = Location(i_, len("formula: "))
-                input_formula.text += " ".join(line_parts[0 if in_formula else 1:]) + "\n"
-                in_formula = formula_found = True
-            elif current_set == "":
-                pass
-            else:
-                raise FirstOrderError(Location(i_, 0), "Unrecognised set '%s'." % current_set)
+            in_formula: bool = False
+            formula_found: bool = False
+            for i_ in range(len(lines)):
+                line_parts = lines[i_].split(" ")
+                current_set: str = line_parts[0][:-1]
+                if current_set in sets.keys():
+                    in_formula = False
+                    sets[current_set].parse(Location(i_), " ".join(line_parts[1:]))
+                    for element_ in sets[current_set]:
+                        for set_ in sets:
+                            if set_ != current_set and sets[set_].contains(element_):
+                                raise FirstOrderError(Location(i_),
+                                                      "Identifier '%s' already in %s set." %
+                                                      (element_, sets[set_].name))
+                elif current_set == "formula" or in_formula:
+                    if not in_formula:
+                        input_formula.start_location = Location(i_, len("formula: "))
+                    input_formula.text += " ".join(line_parts[0 if in_formula else 1:]) + "\n"
+                    in_formula = formula_found = True
+                elif current_set == "":
+                    pass
+                else:
+                    raise FirstOrderError(Location(i_, 0), "Unrecognised set '%s'." % current_set)
 
-        for set_ in sets.values():
-            if not set_.parsed:
-                raise FirstOrderError(None, "%s set could not be found." % set_.name.capitalize())
+            for set_ in sets.values():
+                if not set_.parsed:
+                    raise FirstOrderError(None, "%s set could not be found." % set_.name.capitalize())
 
-        if not formula_found:
-            raise FirstOrderError(None, "Formula cloud not be found.")
+            if not formula_found:
+                raise FirstOrderError(None, "Formula cloud not be found.")
 
-        # print(sets)
-        lexer: FirstOrderLexer = FirstOrderLexer(sets, input_formula)
-        tokens: List[Token] = list(lexer.tokens())
-        print("\n".join(str(token) for token in tokens))
-        parser: FirstOrderParser = FirstOrderParser(lexer)
-    except FirstOrderError as e:
-        err_string: str = str(e)
-        spacer_string: str = "-" * len(err_string) + "-"
-        file_reference_string = ""
-        if e.location is not None and e.location.line_index > -1:
-            error_line: str = lines[e.location.line_index]
-            spacer_string += "-" * max(0, len(error_line) - len(err_string) + 4) + "|"
-            file_reference_string += ">>> %s |\n" % error_line
-            if e.location.position_index > -1:
-                pointer_string: str = " " * (e.location.position_index + 4) + "^"
-                file_reference_string += pointer_string + (" " * (len(spacer_string) - len(pointer_string) - 1) + "|")
-        err_output: str = "" % ()
-        err_string += (" " * (len(spacer_string) - len(err_string) - 1) + "|")
-        print("\n".join([spacer_string, err_string, file_reference_string, spacer_string]))
-        exit(1)
+            lexer: FirstOrderLexer = FirstOrderLexer(sets, input_formula)
+            tokens: List[Token] = list(lexer.tokens())
+            # print("\n".join(str(token) for token in tokens))
+            parser: FirstOrderParser = FirstOrderParser(lexer)
+        except FirstOrderError as e:
+            err_string: str = str(e)
+            spacer_string: str = "-" * len(err_string) + "-"
+            file_reference_string = ""
+            if e.location is not None and e.location.line_index > -1:
+                error_line: str = lines[e.location.line_index]
+                spacer_string += "-" * max(0, len(error_line) - len(err_string) + 4) + "|"
+                file_reference_string += \
+                    ">>> %s" % error_line + (" " * (len(spacer_string) - len(error_line) - 5) + "|")
+                if e.location.position_index > -1:
+                    file_reference_string += "\n"
+                    pointer_string: str = " " * (e.location.position_index + 4) + "^"
+                    file_reference_string += \
+                        pointer_string + (" " * (len(spacer_string) - len(pointer_string) - 1) + "|")
+            err_string += (" " * (len(spacer_string) - len(err_string) - 1) + "|")
+            print("\n".join([spacer_string, err_string, file_reference_string, spacer_string]))
+            exit(1)
+
+
+    main()
