@@ -1,7 +1,28 @@
+from typing import List, Dict, Iterator, Tuple, Pattern
 import sys
 import re
-from typing import List, Set, Dict, Iterator, Tuple, Pattern
+from enum import Enum, unique
 
+@unique
+class FOTokenType(Enum):
+    OPEN_BRACKET = 0
+    CLOSE_BRACKET = 1
+    COMMA = 2
+    # User-defined Sets
+    VARIABLE = 3
+    CONSTANT = 4
+    PREDICATE = 5
+    # Equality Set
+    OP_EQUALS = 6
+    # Connectives Set
+    OP_AND = 7
+    OP_OR = 8
+    OP_IMPLIES = 9
+    OP_IFF = 10
+    OP_NOT = 11
+    # Quantifiers Set
+    OP_EXISTS = 12
+    OP_FOR_ALL = 13
 
 class Location:
     def __init__(self, line_index: int = -1, position: int = -1) -> None:
@@ -21,7 +42,7 @@ class Location:
         return self.__str__()
 
 
-class FirstOrderFormula:
+class FOFormula:
     def __init__(self) -> None:
         self.text: str = ""
         self.start_location = Location()
@@ -48,7 +69,7 @@ class InputSet(list):
         self.line_text = text
         for element in self.line_text.replace("\t", " ").split(" "):
             if element in self:
-                raise FirstOrderError(self.location, "Element '%s' already in %s set." % (element, self.name))
+                raise FOError(self.location, "Element '%s' already in %s set." % (element, self.name))
             if element != "":
                 self.append(element)
         self.verify()
@@ -57,11 +78,11 @@ class InputSet(list):
     def verify(self) -> None:
         for element in self:
             if not self.regex.match(element):
-                raise FirstOrderError(self.location, "Invalid %s syntax '%s'." % (self.name, element))
+                raise FOError(self.location, "Invalid %s syntax '%s'." % (self.name, element))
 
-    def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], str]]:
+    def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], FOTokenType]]:
         for element in self:
-            yield (False, element), self.name.upper()
+            yield (False, element), FOTokenType[self.name.upper()]
 
     def contains(self, item: str) -> bool:
         return item in self
@@ -93,8 +114,8 @@ class OperatorSet(InputSet):
     def verify(self) -> None:
         super().verify()
         if len(self) != len(self.operators):
-            raise FirstOrderError(self.location, "%s set must contain one element (currently %d)." %
-                                  (self.name.capitalize(), len(self)))
+            raise FOError(self.location, "%s set must contain one element (currently %d)." %
+                          (self.name.capitalize(), len(self)))
 
     def parse(self, line_index: Location, text: str) -> None:
         super().parse(line_index, text)
@@ -103,7 +124,7 @@ class OperatorSet(InputSet):
 
     def token_groups(self) -> Iterator[Tuple[str, str]]:
         for literal, operator_type in sorted(self.operator_map, key=lambda op: len(op[0]), reverse=True):
-            yield (False, literal), operator_type
+            yield (False, literal), FOTokenType[operator_type]
 
 
 class VariableSet(LiteralSet):
@@ -133,26 +154,26 @@ class PredicateSet(LiteralSet):
 
     def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], str]]:
         for element in self.data:
-            yield (False, element[0]), self.name.upper()
+            yield (False, element[0]), FOTokenType[self.name.upper()]
 
 
 class EqualitySet(OperatorSet):
     def __init__(self) -> None:
-        super().__init__("equality", ["EQUALS"])
+        super().__init__("equality", ["OP_EQUALS"])
         self.regex: Pattern = re.compile(r"[A-Za-z0-9_\\=]+")
 
 
 class ConnectiveSet(OperatorSet):
     def __init__(self) -> None:
-        super().__init__("connective", ["AND", "OR", "IMPLIES", "IFF", "NOT"])
+        super().__init__("connective", ["OP_AND", "OP_OR", "OP_IMPLIES", "OP_IFF", "OP_NOT"])
 
 
 class QuantifierSet(OperatorSet):
     def __init__(self) -> None:
-        super().__init__("quantifier", ["EXISTS", "FOR_ALL"])
+        super().__init__("quantifier", ["OP_EXISTS", "OP_FOR_ALL"])
 
 
-class FirstOrderError(Exception):
+class FOError(Exception):
     def __init__(self, location: Location or None, message: str) -> None:
         self.location: Location or None = location
         self.message: str = message
@@ -168,25 +189,25 @@ class FirstOrderError(Exception):
 
 
 class Token:
-    def __init__(self, location: Location, token_type: str, value: str) -> None:
+    def __init__(self, location: Location, token_type: FOTokenType, value: str) -> None:
         self.location: Location = location
-        self.type: str = token_type.upper()
+        self.type: FOTokenType = token_type
         self.value: str = value
 
     def __str__(self) -> str:
-        return "Token(%s)" % ", ".join(s for s in [self.type, self.location.string(), "'%s'" % self.value]
+        return "Token(%s)" % ", ".join(s for s in [self.type.name, self.location.string(), "'%s'" % self.value]
                                        if s not in [None, ""])
 
     def __repr__(self) -> str:
         return self.__str__()
 
 
-class FirstOrderLexer:
+class FOLexer:
     def __init__(self, input_sets: Dict[str, InputSet],
-                 formula: FirstOrderFormula = FirstOrderFormula()) -> None:
+                 formula: FOFormula = FOFormula()) -> None:
 
-        self.group_map: Dict[str, str] =\
-            {"GROUP_OB": "OPEN_BRACKET", "GROUP_CB": "CLOSE_BRACKET", "GROUP_CO": "COMMA"}
+        self.group_map: Dict[str, FOTokenType] =\
+            {"GROUP_OB": FOTokenType.OPEN_BRACKET, "GROUP_CB": FOTokenType.CLOSE_BRACKET, "GROUP_CO": FOTokenType.COMMA}
         group_values: List[Tuple[str, Tuple[bool, str]]] =\
             [("GROUP_OB", (False, "(")), ("GROUP_CB", (False, ")")), ("GROUP_CO", (False, ","))]
         group_index: int = 0
@@ -202,12 +223,12 @@ class FirstOrderLexer:
                                   in sorted(group_values, key=lambda tv: len(tv[1][1]), reverse=True)]
 
         self.regex_rules = re.compile(r"|".join(regex_parts))
-        self.input_formula: FirstOrderFormula = formula
+        self.input_formula: FOFormula = formula
         self.index: int = 0
         self.white_space_regex = re.compile(r"\S")
 
-    def set_input(self, formula: FirstOrderFormula) -> None:
-        self.input_formula: FirstOrderFormula = formula
+    def set_input(self, formula: FOFormula) -> None:
+        self.input_formula: FOFormula = formula
         self.index: int = 0
 
     def reset(self) -> None:
@@ -232,7 +253,7 @@ class FirstOrderLexer:
             self.index = rule_match.end()
             return token
 
-        raise FirstOrderError(self.input_formula.get_location(self.index), "Could not match expression.")
+        raise FOError(self.input_formula.get_location(self.index), "Could not match expression.")
 
     def tokens(self, reset=False) -> Iterator[Token]:
         if reset:
@@ -243,19 +264,29 @@ class FirstOrderLexer:
             token = self.next_token()
 
 
-class FirstOrderParser:
-    def __init__(self, first_order_lexer: FirstOrderLexer) -> None:
-        self.lexer: FirstOrderLexer = first_order_lexer
+class FOParser:
+    def __init__(self, lexer: FOLexer) -> None:
+        self.lexer: FOLexer = lexer
 
     def parse(self):
         pass
 
 
 if __name__ == '__main__':
+    from datetime import datetime
+
     def main():
+        use_log: bool = "--no-log" not in sys.argv
+
+        def log(output, end="\n"):
+            if use_log:
+                with open("log.txt", "at") as log_file:
+                    log_file.write(output + end)
+
         with open(sys.argv[1], "rt") as file:
             input_text: str = file.read().replace("\t", "    ")
 
+        log("%s: Parsing '%s'..." % (datetime.now().strftime("%Y/%m/%d %H:%M:%S"), sys.argv[1]))
         lines: List[str] = input_text.split("\n")
 
         try:
@@ -267,44 +298,44 @@ if __name__ == '__main__':
                 "connectives": ConnectiveSet(),
                 "quantifiers": QuantifierSet()
             }
-            input_formula: FirstOrderFormula = FirstOrderFormula()
+            input_formula: FOFormula = FOFormula()
 
             in_formula: bool = False
             formula_found: bool = False
-            for i_ in range(len(lines)):
-                line_parts = lines[i_].split(" ")
+            for i in range(len(lines)):
+                line_parts = lines[i].split(" ")
                 current_set: str = line_parts[0][:-1]
                 if current_set in sets.keys():
                     in_formula = False
-                    sets[current_set].parse(Location(i_), " ".join(line_parts[1:]))
-                    for element_ in sets[current_set]:
+                    sets[current_set].parse(Location(i), " ".join(line_parts[1:]))
+                    for element in sets[current_set]:
                         for set_ in sets:
-                            if set_ != current_set and sets[set_].contains(element_):
-                                raise FirstOrderError(Location(i_),
-                                                      "Identifier '%s' already in %s set." %
-                                                      (element_, sets[set_].name))
+                            if set_ != current_set and sets[set_].contains(element):
+                                raise FOError(Location(i),
+                                              "Identifier '%s' already in %s set." % (element, sets[set_].name))
                 elif current_set == "formula" or in_formula:
                     if not in_formula:
-                        input_formula.start_location = Location(i_, len("formula: "))
+                        input_formula.start_location = Location(i, len("formula: "))
                     input_formula.text += " ".join(line_parts[0 if in_formula else 1:]) + "\n"
                     in_formula = formula_found = True
                 elif current_set == "":
                     pass
                 else:
-                    raise FirstOrderError(Location(i_, 0), "Unrecognised set '%s'." % current_set)
+                    raise FOError(Location(i, 0), "Unrecognised set '%s'." % current_set)
 
             for set_ in sets.values():
                 if not set_.parsed:
-                    raise FirstOrderError(None, "%s set could not be found." % set_.name.capitalize())
+                    raise FOError(None, "%s set could not be found." % set_.name.capitalize())
 
             if not formula_found:
-                raise FirstOrderError(None, "Formula cloud not be found.")
+                raise FOError(None, "Formula cloud not be found.")
 
-            lexer: FirstOrderLexer = FirstOrderLexer(sets, input_formula)
+            lexer: FOLexer = FOLexer(sets, input_formula)
             tokens: List[Token] = list(lexer.tokens())
+            log("Lexical analysis successful...")
             print("\n".join(str(token) for token in tokens))
-            parser: FirstOrderParser = FirstOrderParser(lexer)
-        except FirstOrderError as e:
+            parser: FOParser = FOParser(lexer)
+        except FOError as e:
             err_string: str = str(e)
             spacer_string: str = "-" * len(err_string) + "-"
             file_reference_string = ""
@@ -319,8 +350,9 @@ if __name__ == '__main__':
                     file_reference_string += \
                         pointer_string + (" " * (len(spacer_string) - len(pointer_string) - 1) + "|")
             err_string += (" " * (len(spacer_string) - len(err_string) - 1) + "|")
-            print("\n".join([spacer_string, err_string, file_reference_string, spacer_string]))
+            err_output = "\n".join([spacer_string, err_string, file_reference_string, spacer_string])
+            log(err_output + "\n\n")
+            print(err_output)
             exit(1)
-
 
     main()
