@@ -1,10 +1,36 @@
-Non-terminals: constant, variable, connective, quantifier, equality, const_or_var, variable_collection, atom, formula
-Terminals: <CONSTANT SET>, <VARIABLE SET>, <CONNECTIVE SET excluding NOT>, NOT, <QUANTIFIER SET>
-constant -> <CONSTANT SET>
-variable -> <VARIABLE SET>
-connective -> <CONNECTIVE SET (excluding NOT)>
-quantifier -> <QUANTIFIER SET>
-const_or_var -> constant | variable
-variable_collection -> variable | variable, variable
-atom -> PREDICATE(variable_collection) | (const_or_var <EQUALITY SET> const_or_var)
-formula -> atom | (formula connective formula) | NOT formula
+Non-terminals: constant, variable, connective, quantifier, equality,
+               const_or_var, predicate, variable_collection, atom, formula
+
+Terminals: "CONSTANT", "VARIABLE", "PREDICATE[i]", "EQUALS", "AND",
+           "OR", "IMPLIES", "IFF", "NOT", "EXISTS", "FOR_ALL"
+
+<predicate> ::= [|]{ <PREDICATE[i]> ( "VARIABLE"[1] , "VARIABLE"[2] , ... , "VARIABLE"[n] ) for all i }
+
+<value> ::= "CONSTANT" | "VARIABLE"
+
+<atom> ::= <predicate> |
+           ( <value> "EQUALS" <value> )
+
+<formula> ::= <atom> |
+              ( <formula> "AND" <formula> ) |
+              ( <formula> "OR" <formula> ) |
+              ( <formula> "IMPLIES" <formula> ) |
+              ( <formula> "IF" <formula> ) |
+              "NOT" <formula> |
+              "EXISTS" "VARIABLE" <formula> |
+              "FOR_ALL" "VARIABLE" <formula> |
+
+S ::= <formula>
+
+
+
+
+T -> FT'
+T' -> *FT' | <epsilon>
+
+T -> B*F | F
+
+A -> <beta>A'
+A' -> <alpha>A' | <epsilon>
+
+A -> A<alpha> | <beta>

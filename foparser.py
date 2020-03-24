@@ -1,10 +1,11 @@
-from typing import List, Dict, Iterator, Tuple, Pattern
+from typing import List, Dict, Iterator, Tuple, Pattern, Optional, Match
 import sys
 import re
 from enum import Enum, unique
 
+
 @unique
-class FOTokenType(Enum):
+class FOTerminal(Enum):
     OPEN_BRACKET = 0
     CLOSE_BRACKET = 1
     COMMA = 2
@@ -23,6 +24,17 @@ class FOTokenType(Enum):
     # Quantifiers Set
     OP_EXISTS = 12
     OP_FOR_ALL = 13
+
+
+@unique
+class FONonTerminal(Enum):
+    constant = 0
+    variable = 1
+    predicate = 2
+    value = 3
+    atom = 4
+    formula = 5
+
 
 class Location:
     def __init__(self, line_index: int = -1, position: int = -1) -> None:
@@ -80,9 +92,9 @@ class InputSet(list):
             if not self.regex.match(element):
                 raise FOError(self.location, "Invalid %s syntax '%s'." % (self.name, element))
 
-    def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], FOTokenType]]:
+    def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], FOTerminal]]:
         for element in self:
-            yield (False, element), FOTokenType[self.name.upper()]
+            yield (False, element), FOTerminal[self.name.upper()]
 
     def contains(self, item: str) -> bool:
         return item in self
@@ -102,6 +114,9 @@ class LiteralSet(InputSet):
     def __init__(self, name: str):
         super().__init__(name)
         self.regex: Pattern = re.compile(r"[A-Za-z0-9_]+")
+
+    def get_rules(self) -> List[List[FOTerminal or FONonTerminal or Tuple[FOTerminal, str]]]:
+        return [[(FOTerminal[self.name.upper()], element)] for element in self]
 
 
 class OperatorSet(InputSet):
@@ -124,7 +139,7 @@ class OperatorSet(InputSet):
 
     def token_groups(self) -> Iterator[Tuple[str, str]]:
         for literal, operator_type in sorted(self.operator_map, key=lambda op: len(op[0]), reverse=True):
-            yield (False, literal), FOTokenType[operator_type]
+            yield (False, literal), FOTerminal[operator_type]
 
 
 class VariableSet(LiteralSet):
@@ -140,21 +155,26 @@ class ConstantSet(LiteralSet):
 class PredicateSet(LiteralSet):
     def __init__(self) -> None:
         super().__init__("predicate")
-        self.data: List[Tuple[str, int]] = []
+        self.predicates: List[Tuple[str, int]] = []
         self.regex: Pattern = re.compile(r"[^\[\](),]+\[[0-9]+\]")
 
     def parse(self, line_index: Location, text: str) -> None:
         super().parse(line_index, text)
-        self.data: List[Tuple[str, int]] = []
-        for predicate_string in self:
-            self.data.append((predicate_string.split("[")[0], int(predicate_string.split("[")[1].split("]")[0])))
+        self.predicates: List[Tuple[str, int]] = \
+            list(map(lambda pred: (pred.split("[")[0], int(pred.split("[")[1].split("]")[0])), self))
 
     def contains(self, item: str) -> bool:
-        return item in [predicate[0] for predicate in self.data]
+        return item in [predicate[0] for predicate in self.predicates]
 
     def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], str]]:
-        for element in self.data:
-            yield (False, element[0]), FOTokenType[self.name.upper()]
+        for predicate in self.predicates:
+            yield (False, predicate[0]), FOTerminal[self.name.upper()]
+
+    def get_rules(self) -> List[List[FOTerminal or FONonTerminal or Tuple[FOTerminal, str]]]:
+        return [([(FOTerminal.PREDICATE, name), FOTerminal.OPEN_BRACKET] +
+                 ([item for i in range(arity) for item in ([FONonTerminal.variable, FOTerminal.COMMA]
+                                                           if i != arity - 1 else [FONonTerminal.variable])]) +
+                 [FOTerminal.CLOSE_BRACKET]) for (name, arity) in self.predicates]
 
 
 class EqualitySet(OperatorSet):
@@ -189,9 +209,9 @@ class FOError(Exception):
 
 
 class Token:
-    def __init__(self, location: Location, token_type: FOTokenType, value: str) -> None:
+    def __init__(self, location: Location, token_type: FOTerminal, value: str) -> None:
         self.location: Location = location
-        self.type: FOTokenType = token_type
+        self.type: FOTerminal = token_type
         self.value: str = value
 
     def __str__(self) -> str:
@@ -206,9 +226,9 @@ class FOLexer:
     def __init__(self, input_sets: Dict[str, InputSet],
                  formula: FOFormula = FOFormula()) -> None:
 
-        self.group_map: Dict[str, FOTokenType] =\
-            {"GROUP_OB": FOTokenType.OPEN_BRACKET, "GROUP_CB": FOTokenType.CLOSE_BRACKET, "GROUP_CO": FOTokenType.COMMA}
-        group_values: List[Tuple[str, Tuple[bool, str]]] =\
+        self.group_map: Dict[str, FOTerminal] = \
+            {"GROUP_OB": FOTerminal.OPEN_BRACKET, "GROUP_CB": FOTerminal.CLOSE_BRACKET, "GROUP_CO": FOTerminal.COMMA}
+        group_values: List[Tuple[str, Tuple[bool, str]]] = \
             [("GROUP_OB", (False, "(")), ("GROUP_CB", (False, ")")), ("GROUP_CO", (False, ","))]
         group_index: int = 0
         for literal_set in input_sets.values():
@@ -238,19 +258,21 @@ class FOLexer:
         if self.index > len(self.input_formula.text) - 1:
             return None
 
-        whitespace_match = self.white_space_regex.search(self.input_formula.text, self.index)
+        whitespace_match: Optional[Match[str]] = self.white_space_regex.search(self.input_formula.text, self.index)
 
         if not whitespace_match:
             return None
 
-        self.index = whitespace_match.start()
+        self.index: int = whitespace_match.start()
 
-        rule_match = self.regex_rules.match(self.input_formula.text, self.index)
+        rule_match: Optional[Match[str]] = self.regex_rules.match(self.input_formula.text, self.index)
 
-        if rule_match:
-            group = rule_match.lastgroup
-            token = Token(self.input_formula.get_location(self.index), self.group_map[group], rule_match.group(group))
-            self.index = rule_match.end()
+        if rule_match and rule_match.lastgroup:
+            group: Optional[str] = rule_match.lastgroup
+            token: Token = Token(self.input_formula.get_location(self.index),
+                                 self.group_map[group],
+                                 rule_match.group(group))
+            self.index: int = rule_match.end()
             return token
 
         raise FOError(self.input_formula.get_location(self.index), "Could not match expression.")
@@ -265,8 +287,48 @@ class FOLexer:
 
 
 class FOParser:
-    def __init__(self, lexer: FOLexer) -> None:
+    def __init__(self, lexer: FOLexer, literal_sets: List[LiteralSet]) -> None:
         self.lexer: FOLexer = lexer
+        # Terminals: FOTokenType
+        # Non-terminals: FONonTerminals
+        self.rules: Dict[FONonTerminal, List[List[FONonTerminal or FOTerminal or Tuple[FOTerminal, str]]]] = {
+            **{FONonTerminal[literal_set.name]: literal_set.get_rules() for literal_set in literal_sets},
+            FONonTerminal.value: [[FONonTerminal.constant], [FONonTerminal.variable]],
+            FONonTerminal.atom: [
+                [FONonTerminal.predicate],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.value,
+                 FOTerminal.OP_EQUALS,
+                 FONonTerminal.value,
+                 FOTerminal.CLOSE_BRACKET]
+            ],
+            FONonTerminal.formula: [
+                [FONonTerminal.atom],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.formula,
+                 FOTerminal.OP_AND,
+                 FONonTerminal.formula,
+                 FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.formula,
+                 FOTerminal.OP_OR,
+                 FONonTerminal.formula,
+                 FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.formula,
+                 FOTerminal.OP_IMPLIES,
+                 FONonTerminal.formula,
+                 FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.formula,
+                 FOTerminal.OP_IFF,
+                 FONonTerminal.formula,
+                 FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OP_NOT, FONonTerminal.formula],
+                [FOTerminal.OP_EXISTS, FONonTerminal.variable, FONonTerminal.formula],
+                [FOTerminal.OP_FOR_ALL, FONonTerminal.variable, FONonTerminal.formula]
+            ]
+        }
 
     def parse(self):
         pass
@@ -274,6 +336,32 @@ class FOParser:
 
 if __name__ == '__main__':
     from datetime import datetime
+
+
+    def get_rule_string(rules: Dict[FONonTerminal, List[List[FONonTerminal or FOTerminal or Tuple[FOTerminal, str]]]],
+                        literal_sets: List[LiteralSet], terminal_dict: Dict[FOTerminal, str]) -> str:
+        return "\n".join(
+            [
+                "Terminals: {%s}" % ", ".join(
+                    ["'%s'" % terminal for terminal in terminal_dict.values()] +
+                    [("%s['%s']" % (element[0].name, element[1])) for literal_set in literal_sets
+                     for rule in literal_set.get_rules()
+                     for element in rule if type(element) is tuple]
+                ),
+                "Non-terminals: {%s}" % ", ".join(["<%s>" % non_terminal.name for non_terminal in FONonTerminal]),
+                "Production Rules:"
+            ] + [
+                "<%s> ::= %s" %
+                (non_terminal.name, (" |\n%s" % (" " * len("<%s> ::= " % non_terminal.name))).join([
+                    " ".join(
+                        ((("'%s'" % terminal_dict[element]) if element in terminal_dict else element.name)
+                         if type(element) is FOTerminal else "<%s>" % element.name)
+                        if type(element) is not tuple else ("%s['%s']" % (element[0].name, element[1])) for element in
+                        elements
+                    ) for elements in rule
+                ])) for non_terminal, rule in rules.items()
+            ])
+
 
     def main():
         use_log: bool = "--no-log" not in sys.argv
@@ -290,16 +378,19 @@ if __name__ == '__main__':
         lines: List[str] = input_text.split("\n")
 
         try:
-            sets: Dict[str, InputSet] = {
+            literal_sets: Dict[str, LiteralSet] = {
                 "variables": VariableSet(),
                 "constants": ConstantSet(),
-                "predicates": PredicateSet(),
+                "predicates": PredicateSet()
+            }
+            operator_sets: Dict[str, OperatorSet] = {
                 "equality": EqualitySet(),
                 "connectives": ConnectiveSet(),
                 "quantifiers": QuantifierSet()
             }
-            input_formula: FOFormula = FOFormula()
+            sets: Dict[str, InputSet] = {**literal_sets, **operator_sets}
 
+            input_formula: FOFormula = FOFormula()
             in_formula: bool = False
             formula_found: bool = False
             for i in range(len(lines)):
@@ -331,10 +422,20 @@ if __name__ == '__main__':
                 raise FOError(None, "Formula cloud not be found.")
 
             lexer: FOLexer = FOLexer(sets, input_formula)
-            tokens: List[Token] = list(lexer.tokens())
+            # tokens: List[Token] = list(lexer.tokens())
             log("Lexical analysis successful...")
-            print("\n".join(str(token) for token in tokens))
-            parser: FOParser = FOParser(lexer)
+            # print("\n".join(str(token) for token in tokens))
+            parser: FOParser = FOParser(lexer, list(literal_sets.values()))
+            terminal_dict: Dict[FOTerminal, str] = {
+                FOTerminal.OPEN_BRACKET: "(",
+                FOTerminal.CLOSE_BRACKET: ")",
+                FOTerminal.COMMA: ","
+            }
+            for operator_set in operator_sets.values():
+                for (literal, operator) in operator_set.operator_map:
+                    terminal_dict[FOTerminal[operator]] = literal
+            log("Grammar:\n" + get_rule_string(parser.rules, list(literal_sets.values()), terminal_dict))
+            print(get_rule_string(parser.rules, list(literal_sets.values()), terminal_dict))
         except FOError as e:
             err_string: str = str(e)
             spacer_string: str = "-" * len(err_string) + "-"
@@ -354,5 +455,6 @@ if __name__ == '__main__':
             log(err_output + "\n\n")
             print(err_output)
             exit(1)
+
 
     main()
