@@ -1,0 +1,7 @@
+variables: x y z
+constants: A B
+predicates: C[2] D[1]
+equality: ==
+connectives: and or implies iff not
+quantifiers: exists for_all
+formula: ( x == x )

@@ -11,14 +11,15 @@ Terminals: "CONSTANT", "VARIABLE", "PREDICATE[i]", "EQUALS", "AND",
 <atom> ::= <predicate> |
            ( <value> "EQUALS" <value> )
 
+
 <formula> ::= <atom> |
               ( <formula> "AND" <formula> ) |
               ( <formula> "OR" <formula> ) |
               ( <formula> "IMPLIES" <formula> ) |
-              ( <formula> "IF" <formula> ) |
+              ( <formula> "IF" <formula> )
               "NOT" <formula> |
               "EXISTS" "VARIABLE" <formula> |
-              "FOR_ALL" "VARIABLE" <formula> |
+              "FOR_ALL" "VARIABLE" <formula>
 
 S ::= <formula>
 
@@ -28,9 +29,255 @@ S ::= <formula>
 T -> FT'
 T' -> *FT' | <epsilon>
 
-T -> B*F | F
+T -> T*F | F
 
 A -> <beta>A'
 A' -> <alpha>A' | <epsilon>
 
 A -> A<alpha> | <beta>
+
+
+formula -> predicate
+formula -> ( formula'
+
+formula -> not formula
+formula -> exists variable formula
+formula -> forall variable formula
+
+formula' -> ( value = value ) formula''
+formula' -> predicate
+formula'' -> and formula' )
+formula'' -> or formula' )
+formula'' -> implies formula' )
+formula'' -> iff formula' )
+formula'' -> ''
+
+variable -> x
+variable -> y
+variable -> z
+variable -> w
+
+constant -> C
+constant -> D
+
+predicate -> Q ( variable )
+predicate -> P ( variable , variable )
+
+value -> constant
+value -> variable
+
+
+
+
+
+
+
+
+        self.start_symbol: FONonTerminal = FONonTerminal.formula
+        # self.rules: Dict[FONonTerminal, List[List[FONonTerminal or FOTerminal or Tuple[FOTerminal, str]]]] = {
+        #     **{FONonTerminal[literal_set.name]: literal_set.get_rules() for literal_set in literal_sets},
+        #     FONonTerminal.value: [[FONonTerminal.constant], [FONonTerminal.variable]],
+        #     FONonTerminal.atom: [
+        #         [FONonTerminal.predicate],
+        #         [FOTerminal.OPEN_BRACKET,
+        #          FONonTerminal.value,
+        #          FOTerminal.OP_EQUALS,
+        #          FONonTerminal.value,
+        #          FOTerminal.CLOSE_BRACKET]
+        #     ],
+        #     FONonTerminal.formula: [
+        #         [FONonTerminal.atom],
+        #         [FOTerminal.OPEN_BRACKET,
+        #          FONonTerminal.formula,
+        #          FOTerminal.OP_AND,
+        #          FONonTerminal.formula,
+        #          FOTerminal.CLOSE_BRACKET],
+        #         [FOTerminal.OPEN_BRACKET,
+        #          FONonTerminal.formula,
+        #          FOTerminal.OP_OR,
+        #          FONonTerminal.formula,
+        #          FOTerminal.CLOSE_BRACKET],
+        #         [FOTerminal.OPEN_BRACKET,
+        #          FONonTerminal.formula,
+        #          FOTerminal.OP_IMPLIES,
+        #          FONonTerminal.formula,
+        #          FOTerminal.CLOSE_BRACKET],
+        #         [FOTerminal.OPEN_BRACKET,
+        #          FONonTerminal.formula,
+        #          FOTerminal.OP_IFF,
+        #          FONonTerminal.formula,
+        #          FOTerminal.CLOSE_BRACKET],
+        #         [FOTerminal.OP_NOT, FONonTerminal.formula],
+        #         [FOTerminal.OP_EXISTS, FONonTerminal.variable, FONonTerminal.formula],
+        #         [FOTerminal.OP_FOR_ALL, FONonTerminal.variable, FONonTerminal.formula]
+        #     ]
+        # }
+
+
+
+
+
+
+
+
+
+
+        self.rules: Dict[FONonTerminal, List[List[FONonTerminal or FOTerminal or Tuple[FOTerminal, str]]]] = {
+            FONonTerminal.formula: [
+                [FONonTerminal.predicate],
+                [FOTerminal.OPEN_BRACKET, FONonTerminal.formula_]
+            ],
+            FONonTerminal.formula_: [
+                [FOTerminal.OP_NOT, FONonTerminal.formula],
+                [FOTerminal.OP_EXISTS, FONonTerminal.variable, FONonTerminal.formula],
+                [FOTerminal.OP_FOR_ALL, FONonTerminal.variable, FONonTerminal.formula]
+            ],
+            FONonTerminal.formula__: [
+                [FOTerminal.OPEN_BRACKET, FONonTerminal.value, FOTerminal.OP_EQUALS, FONonTerminal.value,
+                 FONonTerminal.formula__],
+                [FONonTerminal.predicate],
+                [FOTerminal.OP_AND, FONonTerminal.formula_, FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OP_OR, FONonTerminal.formula_, FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OP_IMPLIES, FONonTerminal.formula_, FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OP_IFF, FONonTerminal.formula_, FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.EPSILON],
+            ],
+            FONonTerminal.value: [
+                [FONonTerminal.variable],
+                [FONonTerminal.constant]
+            ],
+            **{FONonTerminal[literal_set.name]: literal_set.get_rules() for literal_set in literal_sets}
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class FOParser:
+    def __init__(self, literal_sets: List[LiteralSet]) -> None:
+        # Terminals: FOTokenType
+        # Non-terminals: FONonTerminals
+        self.start_symbol: FONonTerminal = FONonTerminal.formula
+        self.rules: Dict[FONonTerminal, List[List[FONonTerminal or FOTerminal or Tuple[FOTerminal, str]]]] = {
+            **{FONonTerminal[literal_set.name]: literal_set.get_rules() for literal_set in literal_sets},
+            FONonTerminal.value: [[FONonTerminal.constant], [FONonTerminal.variable]],
+            FONonTerminal.atom: [
+                [FONonTerminal.predicate],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.value,
+                 FOTerminal.OP_EQUALS,
+                 FONonTerminal.value,
+                 FOTerminal.CLOSE_BRACKET]
+            ],
+            FONonTerminal.formula: [
+                [FONonTerminal.atom],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.formula,
+                 FOTerminal.OP_AND,
+                 FONonTerminal.formula,
+                 FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.formula,
+                 FOTerminal.OP_OR,
+                 FONonTerminal.formula,
+                 FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.formula,
+                 FOTerminal.OP_IMPLIES,
+                 FONonTerminal.formula,
+                 FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OPEN_BRACKET,
+                 FONonTerminal.formula,
+                 FOTerminal.OP_IFF,
+                 FONonTerminal.formula,
+                 FOTerminal.CLOSE_BRACKET],
+                [FOTerminal.OP_NOT, FONonTerminal.formula],
+                [FOTerminal.OP_EXISTS, FONonTerminal.variable, FONonTerminal.formula],
+                [FOTerminal.OP_FOR_ALL, FONonTerminal.variable, FONonTerminal.formula]
+            ]
+        }
+
+    def first(self, symbol: FONonTerminal or FOTerminal) -> Set[FOTerminal or Tuple[FOTerminal, str]]:
+        if type(symbol) in [tuple, FOTerminal]:
+            return {symbol}
+        first_set: Set[FOTerminal or Tuple[FOTerminal, str]] = set()
+        for rule in self.rules[symbol]:
+            if len(rule) > 0:
+                first_set.update(self.first(rule[0]))
+        return first_set
+
+    def follow(self, non_terminal: FONonTerminal) \
+            -> Set[FOTerminal or Tuple[FOTerminal, str]]:
+        follow_set: Set[FOTerminal or Tuple[FOTerminal, str]] = set()
+        if non_terminal == self.start_symbol:
+            follow_set.add(FOTerminal.DOLLAR)
+        for current_non_terminal, rules in self.rules.items():
+            for rule in rules:
+                for i in range(len(rule)):
+                    if rule[i] == non_terminal:
+                        follow_set.update(self.first(rule[i + 1])
+                                          if i != len(rule) - 1 else
+                                          (self.follow(current_non_terminal)
+                                           if current_non_terminal != non_terminal else {FOTerminal.DOLLAR}))
+        return follow_set
+
+    @staticmethod
+    def print_terminal_set(terminal_sets: Dict[FONonTerminal, Set[FOTerminal or Tuple[FOTerminal, str]]]) -> None:
+        print(
+            "\n".join(
+                [
+                    ("%s: {%s}" % (str(non_terminal_name), ", ".join(
+                        [("$" if terminal == FOTerminal.DOLLAR else
+                          ("E" if terminal == FOTerminal.EPSILON else terminal.name))
+                         if type(terminal) is FOTerminal else
+                         ("%s['%s']" % (terminal[0].name, terminal[1]))
+                         for terminal in terminal_set]
+                    ))) for non_terminal_name, terminal_set in terminal_sets.items()
+                ]
+            )
+        )
+
+    def parse(self, lexer: FOLexer) -> None:
+        lexer.reset()
+        first_set: Dict[FONonTerminal, Set[FOTerminal or Tuple[FOTerminal, str]]] = \
+            {non_terminal: self.first(non_terminal) for non_terminal in FONonTerminal}
+        self.print_terminal_set(first_set)
+        # follow_set: Dict[FONonTerminal, Set[FOTerminal or Tuple[FOTerminal, str]]] = \
+        #     {non_terminal: self.follow(non_terminal) for non_terminal in FONonTerminal}
+        parse_table: Dict[FONonTerminal, Dict[FOTerminal, int]] = \
+            {non_terminal: {terminal: -1 for terminal in FOTerminal} for non_terminal in FONonTerminal}
+
+        for non_terminal, rules in self.rules.items():
+            for i in range(len(rules)):
+                for terminal in self.first(rules[i][0]):
+                    # if parse_table[non_terminal][terminal[0] if type(terminal) is tuple else terminal] > -1:
+                    #     print(non_terminal, terminal)
+                    parse_table[non_terminal][terminal[0] if type(terminal) is tuple else terminal] = i
+
+        print("\n".join([" ".join([("%d" % item if item > -1 else " ") for item in row.values()])
+                         for row in parse_table.values()]))
+
+        stack: List[FOTerminal or Tuple[FOTerminal, str] or FONonTerminal] = \
+            [self.start_symbol]
+        while len(stack) > 0:
+            token: Token = lexer.next_token()
+            if type(stack[-1]) is FONonTerminal:
+                if parse_table[stack[-1]][token.type] == -1:
+                    raise FOError(token.location, "Non-terminal error")
+                stack[-1] = token.type
+            else:
+                terminal: FOTerminal = stack[-1] if type(stack[-1]) is FOTerminal else stack[-1][0]
+                if terminal != token.type:
+                    raise FOError(token.location, "Terminal error")
+                print("Match %s..." % terminal.name)
+                stack.pop()
