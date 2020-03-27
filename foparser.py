@@ -1,12 +1,10 @@
-from typing import List, Dict, Iterator, Tuple, Pattern, Optional, Match, Set
-import sys
+from typing import List, Dict, Iterator, Tuple, Pattern, Optional, Match
 import re
 from enum import Enum, unique
 
 
 @unique
-class FOTerminal(Enum):
-    DOLLAR = -2
+class FOTokenType(Enum):
     EPSILON = -1
     OPEN_BRACKET = 0
     CLOSE_BRACKET = 1
@@ -28,21 +26,13 @@ class FOTerminal(Enum):
     OP_FOR_ALL = 13
 
 
-# class FONonTerminal(Enum):
-#     formula = 0
-#     formula_ = 1
-#     formula__ = 2
-#     value = 3
-#     predicate = 4
-#     constant = 5
-#     variable = 6
 @unique
 class FONonTerminal(Enum):
     constant = 0
     variable = 1
     predicate = 2
-    value = 3
-    atom = 4
+    complete_predicate = 3
+    value = 4
     formula = 5
 
 
@@ -91,7 +81,7 @@ class InputSet(list):
         self.line_text = text
         for element in self.line_text.replace("\t", " ").split(" "):
             if element in self:
-                raise FOError(self.location, "Element '%s' already in %s set." % (element, self.name))
+                raise FOError(self.location, "Identifier '%s' already in %s set." % (element, self.name))
             if element != "":
                 self.append(element)
         self.verify()
@@ -102,12 +92,15 @@ class InputSet(list):
             if not self.regex.match(element):
                 raise FOError(self.location, "Invalid %s syntax '%s'." % (self.name, element))
 
-    def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], FOTerminal]]:
+    def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], FOTokenType]]:
         for element in self:
-            yield (False, element), FOTerminal[self.name.upper()]
+            yield (False, element), FOTokenType[self.name.upper()]
 
     def contains(self, item: str) -> bool:
         return item in self
+
+    def get_elements(self) -> List:
+        return self
 
     def __str__(self) -> str:
         return "%s(%s)" % \
@@ -125,8 +118,8 @@ class LiteralSet(InputSet):
         super().__init__(name)
         self.regex: Pattern = re.compile(r"[A-Za-z0-9_]+")
 
-    def get_rules(self) -> List[List[FOTerminal or FONonTerminal or Tuple[FOTerminal, str]]]:
-        return [[(FOTerminal[self.name.upper()], element)] for element in self]
+    def get_rules(self) -> List[List[FOTokenType or FONonTerminal or Tuple[FOTokenType, str]]]:
+        return [[(FOTokenType[self.name.upper()], element)] for element in self]
 
 
 class OperatorSet(InputSet):
@@ -139,8 +132,9 @@ class OperatorSet(InputSet):
     def verify(self) -> None:
         super().verify()
         if len(self) != len(self.operators):
-            raise FOError(self.location, "%s set must contain one element (currently %d)." %
-                          (self.name.capitalize(), len(self)))
+            raise FOError(self.location, "%s set must contain %d element%s (currently %d)." %
+                          (self.name.capitalize(), len(self.operators),
+                           "s" if len(self.operators) > 1 else "", len(self)))
 
     def parse(self, line_index: Location, text: str) -> None:
         super().parse(line_index, text)
@@ -149,7 +143,7 @@ class OperatorSet(InputSet):
 
     def token_groups(self) -> Iterator[Tuple[str, str]]:
         for literal, operator_type in sorted(self.operator_map, key=lambda op: len(op[0]), reverse=True):
-            yield (False, literal), FOTerminal[operator_type]
+            yield (False, literal), FOTokenType[operator_type]
 
 
 class VariableSet(LiteralSet):
@@ -172,19 +166,25 @@ class PredicateSet(LiteralSet):
         super().parse(line_index, text)
         self.predicates: List[Tuple[str, int]] = \
             list(map(lambda pred: (pred.split("[")[0], int(pred.split("[")[1].split("]")[0])), self))
+        for predicate, arity in self.predicates:
+            if arity < 1:
+                raise FOError(line_index, "Invalid predicate arity of %d in '%s'." % (arity, predicate))
 
     def contains(self, item: str) -> bool:
-        return item in [predicate[0] for predicate in self.predicates]
+        return item in self.get_elements()
+
+    def get_elements(self) -> List:
+        return [predicate[0] for predicate in self.predicates]
 
     def token_groups(self) -> Iterator[Tuple[Tuple[bool, str], str]]:
         for predicate in self.predicates:
-            yield (False, predicate[0]), FOTerminal[self.name.upper()]
+            yield (False, predicate[0]), FOTokenType[self.name.upper()]
 
-    def get_rules(self) -> List[List[FOTerminal or FONonTerminal or Tuple[FOTerminal, str]]]:
-        return [([(FOTerminal.PREDICATE, name), FOTerminal.OPEN_BRACKET] +
-                 ([item for i in range(arity) for item in ([FONonTerminal.variable, FOTerminal.COMMA]
+    def get_rules(self) -> List[List[FOTokenType or FONonTerminal or Tuple[FOTokenType, str]]]:
+        return [([(FOTokenType.PREDICATE, name), FOTokenType.OPEN_BRACKET] +
+                 ([item for i in range(arity) for item in ([FONonTerminal.variable, FOTokenType.COMMA]
                                                            if i != arity - 1 else [FONonTerminal.variable])]) +
-                 [FOTerminal.CLOSE_BRACKET]) for (name, arity) in self.predicates]
+                 [FOTokenType.CLOSE_BRACKET]) for (name, arity) in self.predicates]
 
 
 class EqualitySet(OperatorSet):
@@ -218,10 +218,18 @@ class FOError(Exception):
         return self.__str__()
 
 
+class FOLexicalError(FOError):
+    pass
+
+
+class FOParseError(FOError):
+    pass
+
+
 class Token:
-    def __init__(self, location: Location, token_type: FOTerminal, value: str) -> None:
+    def __init__(self, location: Location, token_type: FOTokenType, value: str) -> None:
         self.location: Location = location
-        self.type: FOTerminal = token_type
+        self.type: FOTokenType = token_type
         self.value: str = value
 
     def __str__(self) -> str:
@@ -236,8 +244,8 @@ class FOLexer:
     def __init__(self, input_sets: Dict[str, InputSet],
                  formula: FOFormula = FOFormula()) -> None:
 
-        self.group_map: Dict[str, FOTerminal] = \
-            {"GROUP_OB": FOTerminal.OPEN_BRACKET, "GROUP_CB": FOTerminal.CLOSE_BRACKET, "GROUP_CO": FOTerminal.COMMA}
+        self.group_map: Dict[str, FOTokenType] = \
+            {"GROUP_OB": FOTokenType.OPEN_BRACKET, "GROUP_CB": FOTokenType.CLOSE_BRACKET, "GROUP_CO": FOTokenType.COMMA}
         group_values: List[Tuple[str, Tuple[bool, str]]] = \
             [("GROUP_OB", (False, "(")), ("GROUP_CB", (False, ")")), ("GROUP_CO", (False, ","))]
         group_index: int = 0
@@ -285,7 +293,7 @@ class FOLexer:
             self.index: int = rule_match.end()
             return token
 
-        raise FOError(self.input_formula.get_location(self.index), "Could not match expression.")
+        raise FOLexicalError(self.input_formula.get_location(self.index), "Could not match expression.")
 
     def tokens(self, reset: bool = False) -> Iterator[Token]:
         if reset:
@@ -297,108 +305,215 @@ class FOLexer:
 
 
 class FOParser:
-    def __init__(self, lexer: FOLexer, predicate_set: PredicateSet):
+    def __init__(self, lexer: FOLexer, predicate_set: PredicateSet, token_type_map: Dict[FOTokenType, str]) -> None:
         self.lexer: FOLexer = lexer
         self.predicate_set = predicate_set
-        self.lexer.reset()
-        self.current_token: Token = lexer.next_token()
-        self.formula()
+        self.current_token: Token = Token(Location(), FOTokenType.EPSILON, "")
+        self.token_type_map: Dict[FOTokenType, str] = token_type_map
+        self.parse_tree: Tuple[Dict[int, str], List[Tuple[int, int]]] = ({}, [])
+        self.current_node: int = 0
 
-    def next_token(self):
+    def parse(self) -> Tuple[Dict[int, str], List[Tuple[int, int]]]:
+        self.parse_tree: Tuple[Dict[int, str], List[Tuple[int, int]]] = ({}, [])
+        self.current_node: int = 0
+        self.lexer.reset()
+        self.next_token()
+        self.formula()
+        if self.current_token:
+            raise FOParseError(self.current_token.location,
+                               "Syntax Error: Reached end of production with tokens remaining")
+        return self.parse_tree
+
+    def create_node(self, upper_node: int or None, label: str) -> int:
+        self.current_node += 1
+        self.parse_tree[0][self.current_node] = label
+        if upper_node:
+            self.parse_tree[1].append((upper_node, self.current_node))
+        return self.current_node
+
+    def next_token(self) -> None:
         self.current_token: Token = self.lexer.next_token()
 
-    def accept(self, terminal: FOTerminal):
-        if terminal == self.current_token.type:
-            self.next_token()
-            print("Matched %s" % terminal.name)
-        else:
-            raise FOError(self.current_token.location, "Syntax error: cloud not match %s" % terminal.name)
+    def validate_token(self) -> None:
+        if not self.current_token:
+            raise FOParseError(None, "Syntax Error: Reached end of file")
 
-    def formula(self):
-        if self.current_token.type == FOTerminal.OP_NOT:
-            self.accept(FOTerminal.OP_NOT)
-            self.formula()
-        elif self.current_token.type == FOTerminal.OP_FOR_ALL:
-            self.accept(FOTerminal.OP_FOR_ALL)
-            self.accept(FOTerminal.VARIABLE)
-            self.formula()
-        elif self.current_token.type == FOTerminal.OP_EXISTS:
-            self.accept(FOTerminal.OP_EXISTS)
-            self.accept(FOTerminal.VARIABLE)
-            self.formula()
-        elif self.current_token.type == FOTerminal.OPEN_BRACKET:
-            self.accept(FOTerminal.OPEN_BRACKET)
-            if self.current_token.type in [FOTerminal.VARIABLE, FOTerminal.CONSTANT]:
-                self.value()
-                self.accept(FOTerminal.OP_EQUALS)
-                self.value()
+    def accept(self, token_type: FOTokenType, upper_node: int) -> None:
+        self.validate_token()
+        if token_type == self.current_token.type:
+            if token_type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT, FOTokenType.PREDICATE]:
+                new_node = self.create_node(upper_node, r"<%s>" % self.current_token.type.name.lower())
+                self.create_node(new_node, self.current_token.value)
             else:
-                self.formula()
-                if self.current_token.type in [FOTerminal.OP_AND, FOTerminal.OP_OR,
-                                               FOTerminal.OP_IMPLIES, FOTerminal.OP_IFF]:
-                    self.accept(self.current_token.type)
-                self.formula()
-            self.accept(FOTerminal.CLOSE_BRACKET)
-        elif self.current_token.type == FOTerminal.PREDICATE:
-            arity = list(filter(lambda pred: pred[0] == self.current_token.value, self.predicate_set.predicates))[0][1]
-            self.accept(FOTerminal.PREDICATE)
-            self.accept(FOTerminal.OPEN_BRACKET)
-            for i in range(arity):
-                self.accept(FOTerminal.VARIABLE)
-                if i != arity - 1:
-                    self.accept(FOTerminal.COMMA)
-            self.accept(FOTerminal.CLOSE_BRACKET)
+                self.create_node(upper_node, self.current_token.value.replace("\\", "\\\\"))
+            self.next_token()
         else:
-            raise FOError(self.current_token.location, "Syntax error: formula")
+            raise FOParseError(self.current_token.location,
+                               "Syntax error: expecting '%s'" % self.token_type_map[token_type])
 
-    def value(self):
-        if self.current_token.type in [FOTerminal.VARIABLE, FOTerminal.CONSTANT]:
-            self.accept(self.current_token.type)
+    def formula(self, upper_node: int or None = None) -> None:
+        new_node: int = self.create_node(upper_node, "<formula>")
+        self.validate_token()
+        if self.current_token.type == FOTokenType.OP_NOT:
+            self.accept(FOTokenType.OP_NOT, new_node)
+            self.formula(new_node)
+        elif self.current_token.type == FOTokenType.OP_FOR_ALL:
+            self.accept(FOTokenType.OP_FOR_ALL, new_node)
+            self.accept(FOTokenType.VARIABLE, new_node)
+            self.formula(new_node)
+        elif self.current_token.type == FOTokenType.OP_EXISTS:
+            self.accept(FOTokenType.OP_EXISTS, new_node)
+            self.accept(FOTokenType.VARIABLE, new_node)
+            self.formula(new_node)
+        elif self.current_token.type == FOTokenType.OPEN_BRACKET:
+            self.accept(FOTokenType.OPEN_BRACKET, new_node)
+            self.validate_token()
+            if self.current_token.type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT]:
+                if self.current_token.type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT]:
+                    self.accept(self.current_token.type, new_node)
+                self.accept(FOTokenType.OP_EQUALS, new_node)
+                if self.current_token.type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT]:
+                    self.accept(self.current_token.type, new_node)
+            else:
+                self.formula(new_node)
+                self.validate_token()
+                if self.current_token.type in [FOTokenType.OP_AND, FOTokenType.OP_OR,
+                                               FOTokenType.OP_IMPLIES, FOTokenType.OP_IFF]:
+                    self.accept(self.current_token.type, new_node)
+                self.formula(new_node)
+            self.accept(FOTokenType.CLOSE_BRACKET, new_node)
+        elif self.current_token.type == FOTokenType.PREDICATE:
+            self.complete_predicate(new_node)
         else:
-            raise FOError(self.current_token.location, "Syntax error: value")
+            raise FOParseError(self.current_token.location,
+                               "Syntax error: cloud not match '%s'" % self.current_token.value)
+
+    def complete_predicate(self, upper_node: int):
+        new_node = self.create_node(upper_node, "<complete_predicate>")
+        arity = list(filter(lambda pred: pred[0] == self.current_token.value, self.predicate_set.predicates))[0][1]
+        self.accept(FOTokenType.PREDICATE, new_node)
+        self.accept(FOTokenType.OPEN_BRACKET, new_node)
+        for i in range(arity):
+            self.accept(FOTokenType.VARIABLE, new_node)
+            if i != arity - 1:
+                self.accept(FOTokenType.COMMA, new_node)
+        self.accept(FOTokenType.CLOSE_BRACKET, new_node)
+
+    def value(self, upper_node: int):
+        new_node = self.create_node(upper_node, "<value>")
+        self.validate_token()
+        if self.current_token.type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT]:
+            self.accept(self.current_token.type, new_node)
+        else:
+            raise FOParseError(self.current_token.location,
+                               "Syntax error: cloud not match to '%s' variable or constant." % self.current_token)
 
 
 if __name__ == '__main__':
+    import argparse
+    import os
     from datetime import datetime
 
+    try:
+        from graphviz import Graph, nohtml
+    except ImportError:
+        Graph: None = None
+        nohtml: None = None
 
-    def get_rule_string(rules: Dict[FONonTerminal, List[List[FONonTerminal or FOTerminal or Tuple[FOTerminal, str]]]],
-                        literal_sets: List[LiteralSet], terminal_dict: Dict[FOTerminal, str]) -> str:
-        return "\n".join(
-            [
-                "Terminals: {%s}" % ", ".join(
-                    ["'%s'" % terminal for terminal in terminal_dict.values()] +
-                    [("%s['%s']" % (element[0].name, element[1])) for literal_set in literal_sets
-                     for rule in literal_set.get_rules()
-                     for element in rule if type(element) is tuple]
-                ),
-                "Non-terminals: {%s}" % ", ".join(["<%s>" % non_terminal.name for non_terminal in FONonTerminal]),
-                "", "Production Rules:"
-            ] + [
-                "<%s> ::= %s" %
-                (non_terminal.name, (" |\n%s" % (" " * len("<%s> ::= " % non_terminal.name))).join([
-                    " ".join(
-                        ((("'%s'" % terminal_dict[element]) if element in terminal_dict else element.name)
-                         if type(element) is FOTerminal else "<%s>" % element.name)
-                        if type(element) is not tuple else ("%s['%s']" % (element[0].name, element[1])) for element in
-                        elements
-                    ) for elements in rule
-                ])) for non_terminal, rule in rules.items()
-            ])
+    arg_parser: argparse.ArgumentParser = argparse.ArgumentParser(description="Parse first-order logic files.")
+    arg_parser.add_argument("filename")
+    arg_parser.add_argument("-l", "--log", help="output to log file", action="store_true")
+    arg_parser.add_argument("-o", "--log-file", help="filename for output log (default: 'log.txt')",
+                            default="log.txt", type=str, action="store")
+    arg_parser.add_argument("-d", "--dir", help="file output directory (default: input file directory)",
+                            default="", type=str, action="store")
+    arg_parser.add_argument("-n", "--name", help="logic name and prefix of output files",
+                            default=None, type=str, action="store")
+    arg_parser.add_argument("--graphviz", help="",
+                            default=None, type=str, action="store")
+    arg_parser.add_argument("-g", "--graph", help="output a graph representing the parse tree", action="store_true")
+    arg_parser.add_argument("-c", "--grammar",
+                            help="output the grammar corresponding to the parse tree", action="store_true")
+    arg_parser.add_argument("-f", "--format-grammar",
+                            help="add line breaks between productions and union productions", action="store_true")
+    arg_parser.add_argument("-e", "--label-literals",
+                            help="label literal values in the grammar with their token names", action="store_true")
+    args = arg_parser.parse_args()
+
+    USE_LOG: bool = args.log
+    LOG_FILENAME: str = args.log_file
+    OUTPUT_GRAPH: bool = args.graph
+    OUTPUT_GRAMMAR: bool = args.grammar
+    FORMAT_GRAMMAR: bool = args.format_grammar
+    LABEL_LITERALS: bool = args.label_literals
+    INPUT_FILENAME: str = args.filename
+    OUTPUT_DIRECTORY: str = args.dir
+    OUTPUT_PREFIX: str = args.name if args.name else ".".join(INPUT_FILENAME.split(".")[:-1])
+
+    if args.graphviz:
+        os.environ["PATH"] += "%s%s" % (os.pathsep, args.graphviz)
+
+    if OUTPUT_DIRECTORY and not os.path.exists(OUTPUT_DIRECTORY):
+        os.mkdir(OUTPUT_DIRECTORY)
+
+    def log(output: str, end: str = "\n", include_date_time: bool = True, include_file: bool = True) -> None:
+        text: str = "%s%s%s%s%s" % (datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                                    if include_date_time else "",
+                                    " <%s>" % OUTPUT_PREFIX if include_file else "",
+                                    ": " if include_date_time or include_file else "", output, end)
+        if USE_LOG:
+            with open(LOG_FILENAME, "at") as log_file:
+                log_file.write(text)
+        else:
+            print(text, end="")
+
+
+    if OUTPUT_GRAPH and not Graph:
+        log("Warning: graphviz could not be imported (cannot output graph).")
+
+
+    def get_rule_string(grammar: Dict[FONonTerminal,
+                                      List[List[FONonTerminal or FOTokenType or Tuple[FOTokenType, str]]]],
+                        literal_sets: List[LiteralSet], token_type_map: Dict[FOTokenType, str]) -> str:
+        return "%s\n%s" % ("\n".join([
+            "Terminals: {%s}" % ", ".join(
+                ["'%s'" % token_type for token_type in token_type_map.values()] +
+                [("%s['%s']" % (element[0].name, element[1])) for literal_set in literal_sets
+                 for rule in literal_set.get_rules()
+                 for element in rule if type(element) is tuple]
+            ),
+            "Non-terminals: {%s}" % ", ".join(["<%s>" % non_terminal.name for non_terminal in FONonTerminal]),
+            "", "Production Rules:"
+        ]), ("\n\n" if FORMAT_GRAMMAR else "\n").join([
+            "<%s> ::= %s" %
+            (non_terminal.name,
+             (" |%s" % (
+                 ("\n" + (" " * len(
+                     "<%s> ::= " % non_terminal.name))) if FORMAT_GRAMMAR else " ")).join(
+                 [" ".join(
+                     ((("'%s'" % token_type_map[
+                         element]) if element in token_type_map else element.name)
+                      if type(element) is FOTokenType else "<%s>" % element.name)
+                     if type(element) is not tuple else ("%s['%s']" % (element[0].name, element[1])
+                                                         if LABEL_LITERALS else "'%s'" % element[1])
+                     for element in
+                     elements
+                 ) for elements in rule])) for non_terminal, rule in grammar.items()]))
+
+
+    class FOFileError(FOError):
+        pass
 
 
     def main() -> int:
-        use_log: bool = "--no-log" not in sys.argv
+        try:
+            log("Loading '%s'..." % INPUT_FILENAME, include_file=False)
+            with open(INPUT_FILENAME, "rt") as file:
+                input_text: str = file.read().replace("\t", "    ")
+        except FileNotFoundError:
+            log("Could not find input file...")
+            exit(1)
 
-        def log(output, end="\n"):
-            if use_log:
-                with open("log.txt", "at") as log_file:
-                    log_file.write(output + end)
-
-        with open(sys.argv[1], "rt") as file:
-            input_text: str = file.read().replace("\t", "    ")
-
-        log("%s: Parsing '%s'..." % (datetime.now().strftime("%Y/%m/%d %H:%M:%S"), sys.argv[1]))
         lines: List[str] = input_text.split("\n")
 
         try:
@@ -424,7 +539,7 @@ if __name__ == '__main__':
                 if current_set in sets.keys():
                     in_formula = False
                     sets[current_set].parse(Location(i), " ".join(line_parts[1:]))
-                    for element in sets[current_set]:
+                    for element in sets[current_set].get_elements():
                         for set_ in sets:
                             if set_ != current_set and sets[set_].contains(element):
                                 raise FOError(Location(i),
@@ -447,19 +562,78 @@ if __name__ == '__main__':
                 raise FOError(None, "Formula cloud not be found.")
 
             lexer: FOLexer = FOLexer(sets, input_formula)
-            # tokens: List[Token] = list(lexer.tokens())
-            log("Lexical analysis successful...")
-            # print("\n".join(str(token) for token in tokens))
-            parser: FOParser = FOParser(lexer, predicate_set)
-            # terminal_dict: Dict[FOTerminal, str] = {
-            #     FOTerminal.OPEN_BRACKET: "(",
-            #     FOTerminal.CLOSE_BRACKET: ")",
-            #     FOTerminal.COMMA: ","
-            # }
-            # for operator_set in operator_sets.values():
-            #     for (literal, operator) in operator_set.operator_map:
-            #         terminal_dict[FOTerminal[operator]] = literal
-            # log("Grammar:\n" + get_rule_string(parser.rules, list(literal_sets.values()), terminal_dict))
+            token_type_map: Dict[FOTokenType, str] = {
+                FOTokenType.OPEN_BRACKET: "(",
+                FOTokenType.CLOSE_BRACKET: ")",
+                FOTokenType.COMMA: ","
+            }
+            for operator_set in operator_sets.values():
+                for (literal, operator) in operator_set.operator_map:
+                    token_type_map[FOTokenType[operator]] = literal
+
+            for literal_set in literal_sets.values():
+                token_type_map[FOTokenType[literal_set.name.upper()]] = literal_set.name
+
+            log("Parsing formula...")
+            parser: FOParser = FOParser(lexer, predicate_set, token_type_map)
+            parse_tree_tuple: Tuple[Dict[int, str], List[Tuple[int, int]]] = parser.parse()
+            log("Parse successful.")
+
+            if OUTPUT_GRAPH and Graph and nohtml:
+                log("Generating graph for parse tree...")
+                parse_tree: Graph = Graph()
+                nodes, edges = parse_tree_tuple
+                for node, label in nodes.items():
+                    parse_tree.node(str(node), nohtml(label.replace("\\", "\\\\")))
+                parse_tree.edges([(str(edge[0]), str(edge[1])) for edge in edges])
+                graph_output: str = os.path.join(OUTPUT_DIRECTORY, "%s.parse-tree" % OUTPUT_PREFIX)
+                log("Outputting parse tree to '%s.pdf'..." % graph_output)
+                parse_tree.format = "pdf"
+                parse_tree.render(graph_output, cleanup=True)
+
+            grammar: Dict[FONonTerminal, List[List[FONonTerminal or FOTokenType or Tuple[FOTokenType, str]]]] = {
+                **{FONonTerminal[literal_set.name]: literal_set.get_rules() for literal_set in literal_sets.values()},
+                FONonTerminal.value: [[FONonTerminal.constant], [FONonTerminal.variable]],
+                FONonTerminal.formula: [
+                    [FOTokenType.OPEN_BRACKET,
+                     FONonTerminal.formula,
+                     FOTokenType.OP_AND,
+                     FONonTerminal.formula,
+                     FOTokenType.CLOSE_BRACKET],
+                    [FOTokenType.OPEN_BRACKET,
+                     FONonTerminal.formula,
+                     FOTokenType.OP_OR,
+                     FONonTerminal.formula,
+                     FOTokenType.CLOSE_BRACKET],
+                    [FOTokenType.OPEN_BRACKET,
+                     FONonTerminal.formula,
+                     FOTokenType.OP_IMPLIES,
+                     FONonTerminal.formula,
+                     FOTokenType.CLOSE_BRACKET],
+                    [FOTokenType.OPEN_BRACKET,
+                     FONonTerminal.formula,
+                     FOTokenType.OP_IFF,
+                     FONonTerminal.formula,
+                     FOTokenType.CLOSE_BRACKET],
+                    [FOTokenType.OPEN_BRACKET,
+                     FONonTerminal.value,
+                     FOTokenType.OP_EQUALS,
+                     FONonTerminal.value,
+                     FOTokenType.CLOSE_BRACKET],
+                    [FONonTerminal.complete_predicate],
+                    [FOTokenType.OP_NOT, FONonTerminal.formula],
+                    [FOTokenType.OP_EXISTS, FONonTerminal.variable, FONonTerminal.formula],
+                    [FOTokenType.OP_FOR_ALL, FONonTerminal.variable, FONonTerminal.formula]
+                ]
+            }
+
+            if OUTPUT_GRAMMAR:
+                grammar_filename: str = os.path.join(OUTPUT_DIRECTORY, "%s.grammar.txt" % OUTPUT_PREFIX)
+                log("Outputting grammar to '%s'..." % grammar_filename)
+                with open(grammar_filename, "wt") as grammar_file:
+                    grammar_file.write(("First Order Grammar for '%s':\n" % OUTPUT_PREFIX) +
+                                       get_rule_string(grammar, list(literal_sets.values()), token_type_map))
+                log("Done.")
             return 0
         except FOError as e:
             err_string: str = str(e)
@@ -476,10 +650,16 @@ if __name__ == '__main__':
                     file_reference_string += \
                         pointer_string + (" " * (len(spacer_string) - len(pointer_string) - 1) + "|")
             err_string += (" " * (len(spacer_string) - len(err_string) - 1) + "|")
-            err_output = "\n".join([spacer_string, err_string, file_reference_string, spacer_string])
-            log(err_output + "\n\n")
-            print(err_output)
+            err_output = "\n".join([spacer_string, err_string] +
+                                   ([file_reference_string] if file_reference_string else []) +
+                                   [spacer_string])
+            log("An error occurred while %s:" %
+                ("parsing the formula" if type(e) is FOParseError else
+                 ("performing lexical analysis" if type(e) is FOLexicalError else "parsing the file")))
+            log(err_output, include_file=False, include_date_time=False)
             return 1
+        finally:
+            log("", include_file=False, include_date_time=False)
 
 
     exit(main())

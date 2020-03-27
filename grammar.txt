@@ -281,3 +281,108 @@ class FOParser:
                     raise FOError(token.location, "Terminal error")
                 print("Match %s..." % terminal.name)
                 stack.pop()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class FOParser:
+    def __init__(self, lexer: FOLexer, predicate_set: PredicateSet, token_type_map: Dict[FOTokenType, str]):
+        self.lexer: FOLexer = lexer
+        self.predicate_set = predicate_set
+        self.current_token: Token = Token(Location(), FOTokenType.EPSILON, "")
+        self.token_type_map: Dict[FOTokenType, str] = token_type_map
+        self.graph = igraph.Graph()
+
+    def parse(self):
+        self.graph.delete_vertices([v for v in range(self.graph.vcount())])
+        self.lexer.reset()
+        self.next_token()
+        self.formula(self.graph.add_vertex("root", label="<formula>"))
+
+    def next_token(self):
+        self.current_token: Token = self.lexer.next_token()
+
+    def accept(self, token_type: FOTokenType, upper_vertex: igraph.Vertex):
+        if token_type == self.current_token.type:
+            new_vertex = self.graph.add_vertex(label=self.current_token.value)
+            self.graph.add_edge(upper_vertex, new_vertex)
+            self.next_token()
+        else:
+            raise FOParseError(self.current_token.location,
+                               "Syntax error: expecting '%s'" % self.token_type_map[token_type])
+
+    def formula(self, upper_vertex: igraph.Vertex):
+        new_vertex = self.graph.add_vertex(label="<formula>")
+        self.graph.add_edge(upper_vertex, new_vertex)
+        if self.current_token.type == FOTokenType.OP_NOT:
+            self.accept(FOTokenType.OP_NOT, new_vertex)
+            self.formula(new_vertex)
+        elif self.current_token.type == FOTokenType.OP_FOR_ALL:
+            self.accept(FOTokenType.OP_FOR_ALL, new_vertex)
+            self.accept(FOTokenType.VARIABLE, new_vertex)
+            self.formula(new_vertex)
+        elif self.current_token.type == FOTokenType.OP_EXISTS:
+            self.accept(FOTokenType.OP_EXISTS, new_vertex)
+            self.accept(FOTokenType.VARIABLE, new_vertex)
+            self.formula(new_vertex)
+        elif self.current_token.type == FOTokenType.OPEN_BRACKET:
+            self.accept(FOTokenType.OPEN_BRACKET, new_vertex)
+            if self.current_token.type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT]:
+                if self.current_token.type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT]:
+                    self.accept(self.current_token.type, new_vertex)
+                self.accept(FOTokenType.OP_EQUALS, new_vertex)
+                if self.current_token.type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT]:
+                    self.accept(self.current_token.type, new_vertex)
+            else:
+                self.formula(new_vertex)
+                if self.current_token.type in [FOTokenType.OP_AND, FOTokenType.OP_OR,
+                                               FOTokenType.OP_IMPLIES, FOTokenType.OP_IFF]:
+                    self.accept(self.current_token.type, new_vertex)
+                self.formula(new_vertex)
+            self.accept(FOTokenType.CLOSE_BRACKET, new_vertex)
+        elif self.current_token.type == FOTokenType.PREDICATE:
+            self.predicate(new_vertex)
+        else:
+            raise FOParseError(self.current_token.location,
+                               "Syntax error: cloud not match '%s'" % self.current_token.value)
+
+    def predicate(self, upper_vertex: igraph.Vertex):
+        new_vertex = self.graph.add_vertex(label="<predicate>")
+        self.graph.add_edge(upper_vertex, new_vertex)
+        arity = list(filter(lambda pred: pred[0] == self.current_token.value, self.predicate_set.predicates))[0][1]
+        self.accept(FOTokenType.PREDICATE, new_vertex)
+        self.accept(FOTokenType.OPEN_BRACKET, new_vertex)
+        for i in range(arity):
+            self.accept(FOTokenType.VARIABLE, new_vertex)
+            if i != arity - 1:
+                self.accept(FOTokenType.COMMA, new_vertex)
+        self.accept(FOTokenType.CLOSE_BRACKET, new_vertex)
+
+    def value(self, upper_vertex: igraph.Vertex):
+        new_vertex = self.graph.add_vertex(label="<value>")
+        self.graph.add_edge(upper_vertex, new_vertex)
+        if self.current_token.type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT]:
+            self.accept(self.current_token.type, new_vertex)
+        else:
+            raise FOParseError(self.current_token.location,
+                               "Syntax error: cloud not match to '%s' variable or constant." % self.current_token)
+
+
+
+igraph.plot(parser.graph, graph_filename, layout=parser.graph.layout("tree", root=0))
+
+
+
+

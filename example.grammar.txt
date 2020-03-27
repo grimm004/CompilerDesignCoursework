@@ -1,0 +1,10 @@
+First Order Grammar for 'example':
+Terminals: {'(', ')', ',', '=', '\land', '\lor', '\implies', '\iff', '\neg', '\exists', '\forall', 'variable', 'constant', 'predicate', VARIABLE['w'], VARIABLE['x'], VARIABLE['y'], VARIABLE['z'], CONSTANT['C'], CONSTANT['D'], PREDICATE['P'], PREDICATE['Q']}
+Non-terminals: {<constant>, <variable>, <predicate>, <complete_predicate>, <value>, <formula>}
+
+Production Rules:
+<variable> ::= 'w' | 'x' | 'y' | 'z'
+<constant> ::= 'C' | 'D'
+<predicate> ::= 'P' '(' <variable> ',' <variable> ')' | 'Q' '(' <variable> ')'
+<value> ::= <constant> | <variable>
+<formula> ::= '(' <formula> '\land' <formula> ')' | '(' <formula> '\lor' <formula> ')' | '(' <formula> '\implies' <formula> ')' | '(' <formula> '\iff' <formula> ')' | '(' <value> '=' <value> ')' | <complete_predicate> | '\neg' <formula> | '\exists' <variable> <formula> | '\forall' <variable> <formula>

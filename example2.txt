@@ -1,7 +1,7 @@
-variables: x y z
+variables: x y
 constants: A B
 predicates: C[2] D[1]
 equality: ==
 connectives: and or implies iff not
 quantifiers: exists for_all
-formula: ( x == x )
+formula: for_all x ( x == x ) or C( x, y )
