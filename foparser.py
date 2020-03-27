@@ -31,7 +31,6 @@ class FONonTerminal(Enum):
     constant = 0
     variable = 1
     predicate = 2
-    complete_predicate = 3
     value = 4
     formula = 5
 
@@ -341,11 +340,7 @@ class FOParser:
     def accept(self, token_type: FOTokenType, upper_node: int) -> None:
         self.validate_token()
         if token_type == self.current_token.type:
-            if token_type in [FOTokenType.VARIABLE, FOTokenType.CONSTANT, FOTokenType.PREDICATE]:
-                new_node = self.create_node(upper_node, r"<%s>" % self.current_token.type.name.lower())
-                self.create_node(new_node, self.current_token.value)
-            else:
-                self.create_node(upper_node, self.current_token.value.replace("\\", "\\\\"))
+            self.create_node(upper_node, self.current_token.value.replace("\\", "\\\\"))
             self.next_token()
         else:
             raise FOParseError(self.current_token.location,
@@ -354,16 +349,16 @@ class FOParser:
     def formula(self, upper_node: int or None = None) -> None:
         new_node: int = self.create_node(upper_node, "<formula>")
         self.validate_token()
-        if self.current_token.type == FOTokenType.OP_NOT:
-            self.accept(FOTokenType.OP_NOT, new_node)
-            self.formula(new_node)
-        elif self.current_token.type == FOTokenType.OP_FOR_ALL:
+        if self.current_token.type == FOTokenType.OP_FOR_ALL:
             self.accept(FOTokenType.OP_FOR_ALL, new_node)
             self.accept(FOTokenType.VARIABLE, new_node)
             self.formula(new_node)
         elif self.current_token.type == FOTokenType.OP_EXISTS:
             self.accept(FOTokenType.OP_EXISTS, new_node)
             self.accept(FOTokenType.VARIABLE, new_node)
+            self.formula(new_node)
+        elif self.current_token.type == FOTokenType.OP_NOT:
+            self.accept(FOTokenType.OP_NOT, new_node)
             self.formula(new_node)
         elif self.current_token.type == FOTokenType.OPEN_BRACKET:
             self.accept(FOTokenType.OPEN_BRACKET, new_node)
@@ -383,21 +378,17 @@ class FOParser:
                 self.formula(new_node)
             self.accept(FOTokenType.CLOSE_BRACKET, new_node)
         elif self.current_token.type == FOTokenType.PREDICATE:
-            self.complete_predicate(new_node)
+            arity = list(filter(lambda pred: pred[0] == self.current_token.value, self.predicate_set.predicates))[0][1]
+            self.accept(FOTokenType.PREDICATE, new_node)
+            self.accept(FOTokenType.OPEN_BRACKET, new_node)
+            for i in range(arity):
+                self.accept(FOTokenType.VARIABLE, new_node)
+                if i != arity - 1:
+                    self.accept(FOTokenType.COMMA, new_node)
+            self.accept(FOTokenType.CLOSE_BRACKET, new_node)
         else:
             raise FOParseError(self.current_token.location,
                                "Syntax error: cloud not match '%s'" % self.current_token.value)
-
-    def complete_predicate(self, upper_node: int):
-        new_node = self.create_node(upper_node, "<complete_predicate>")
-        arity = list(filter(lambda pred: pred[0] == self.current_token.value, self.predicate_set.predicates))[0][1]
-        self.accept(FOTokenType.PREDICATE, new_node)
-        self.accept(FOTokenType.OPEN_BRACKET, new_node)
-        for i in range(arity):
-            self.accept(FOTokenType.VARIABLE, new_node)
-            if i != arity - 1:
-                self.accept(FOTokenType.COMMA, new_node)
-        self.accept(FOTokenType.CLOSE_BRACKET, new_node)
 
     def value(self, upper_node: int):
         new_node = self.create_node(upper_node, "<value>")
@@ -595,6 +586,9 @@ if __name__ == '__main__':
                 **{FONonTerminal[literal_set.name]: literal_set.get_rules() for literal_set in literal_sets.values()},
                 FONonTerminal.value: [[FONonTerminal.constant], [FONonTerminal.variable]],
                 FONonTerminal.formula: [
+                    [FOTokenType.OP_EXISTS, FONonTerminal.variable, FONonTerminal.formula],
+                    [FOTokenType.OP_FOR_ALL, FONonTerminal.variable, FONonTerminal.formula],
+                    [FOTokenType.OP_NOT, FONonTerminal.formula],
                     [FOTokenType.OPEN_BRACKET,
                      FONonTerminal.formula,
                      FOTokenType.OP_AND,
@@ -620,10 +614,7 @@ if __name__ == '__main__':
                      FOTokenType.OP_EQUALS,
                      FONonTerminal.value,
                      FOTokenType.CLOSE_BRACKET],
-                    [FONonTerminal.complete_predicate],
-                    [FOTokenType.OP_NOT, FONonTerminal.formula],
-                    [FOTokenType.OP_EXISTS, FONonTerminal.variable, FONonTerminal.formula],
-                    [FOTokenType.OP_FOR_ALL, FONonTerminal.variable, FONonTerminal.formula]
+                    [FONonTerminal.predicate]
                 ]
             }
 

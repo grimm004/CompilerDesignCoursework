@@ -1,6 +1,6 @@
 First Order Grammar for 'demo':
 Terminals: {'(', ')', ',', '==', 'AND', 'OR', 'IMPLIES', 'IFF', 'NOT', 'E', 'A', 'variable', 'constant', 'predicate', VARIABLE['price'], VARIABLE['cost1'], CONSTANT['30'], CONSTANT['Z'], PREDICATE['Same'], PREDICATE['Non_zero'], PREDICATE['notEqual']}
-Non-terminals: {<constant>, <variable>, <predicate>, <complete_predicate>, <value>, <formula>}
+Non-terminals: {<constant>, <variable>, <predicate>, <value>, <formula>}
 
 Production Rules:
 <variable> ::= VARIABLE['price'] |
@@ -16,12 +16,12 @@ Production Rules:
 <value> ::= <constant> |
             <variable>
 
-<formula> ::= '(' <formula> 'AND' <formula> ')' |
+<formula> ::= 'E' <variable> <formula> |
+              'A' <variable> <formula> |
+              'NOT' <formula> |
+              '(' <formula> 'AND' <formula> ')' |
               '(' <formula> 'OR' <formula> ')' |
               '(' <formula> 'IMPLIES' <formula> ')' |
               '(' <formula> 'IFF' <formula> ')' |
               '(' <value> '==' <value> ')' |
-              <complete_predicate> |
-              'NOT' <formula> |
-              'E' <variable> <formula> |
-              'A' <variable> <formula>
+              <predicate>
